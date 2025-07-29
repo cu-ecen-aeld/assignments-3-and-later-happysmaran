@@ -1,4 +1,9 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +21,15 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int temp = system(cmd);
+    
+    if (temp == -1 || !WIFEXITED(temp)) {
+        return false;
+    } else {
+        return true;
+    }
 
-    return true;
+    return false;
 }
 
 /**
@@ -58,9 +70,30 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    fflush(stdout); // Ensure stdout is flushed before forking
+    pid_t pid = fork();
+
+    if (pid < 0) { // Fork failed
+        return false;
+        perror("fork failed");
+    } else if (pid == 0) {
+        execv(command[0], command);
+        exit(EXIT_FAILURE);
+        perror("execv failed");
+    } else {
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            perror("waitpid failed");
+            return false;
+        }
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
     va_end(args);
-
     return true;
 }
 
@@ -92,8 +125,42 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    fflush(stdout); // Ensure stdout is flushed before redirecting
+    pid_t pid = fork();
+    if (pid < 0) { // Fork failed
+        return false;
+    } else if (pid == 0) {
+        int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            perror("open failed");
+            exit(EXIT_FAILURE);
+            return false;
+        }
+        
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            perror("dup2 failed");
+            close(fd);
+            exit(EXIT_FAILURE);
+        }
+        
+        close(fd);
+        execv(command[0], command);
+        perror("execv failed");
+        
+        exit(EXIT_FAILURE);
+    } else {
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            perror("waitpid failed");
+            return false;
+        }
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
     va_end(args);
-
     return true;
 }

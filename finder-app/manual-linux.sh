@@ -55,9 +55,9 @@ fi
 # TODO: Create necessary base directories
 if [ ! -d "${OUTDIR}/rootfs" ]
 then
-    mkdir ${OUTDIR}/rootfs
-    cd ${OUTDIR}/rootfs
-    mkdir \
+    mkdir -p "${OUTDIR}/rootfs"
+    cd "${OUTDIR}/rootfs"
+    mkdir -p \
         bin \
         dev \
         etc \
@@ -69,10 +69,12 @@ then
         sys \
         tmp \
         usr \
+        var
+    mkdir -p \
         usr/bin \
         usr/lib \
-        usr/sbin \
-        var \
+        usr/sbin
+    mkdir -p \
         var/log
 fi
 
@@ -109,6 +111,7 @@ cp ${SYSROOT}/lib64/libc.so.6 lib64
 # TODO: Make device nodes
 sudo mknod -m 666 dev/null c 1 3
 sudo mknod -m 600 dev/console c 5 1
+sudo mknod -m 600 dev/tty0 c 4 0
 sudo mknod -m 600 dev/tty1 c 4 1
 sudo mknod -m 600 dev/tty2 c 4 2
 sudo mknod -m 600 dev/tty3 c 4 3
@@ -126,6 +129,7 @@ make CROSS_COMPILE=${CROSS_COMPILE}
 cd ${OUTDIR}/rootfs/home
 mkdir conf
 cp ${FINDER_APP_DIR}/writer .
+cp ${FINDER_APP_DIR}/writer.sh .
 cp "${FINDER_APP_DIR}/finder.sh" .
 cp ${FINDER_APP_DIR}/finder-test.sh .
 cp ${FINDER_APP_DIR}/conf/username.txt ./conf

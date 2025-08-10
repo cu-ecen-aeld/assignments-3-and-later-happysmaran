@@ -1,9 +1,9 @@
-CC := $(CROSS_COMPILE) gcc
+CC := $(CROSS_COMPILE)gcc
 
-default: writer
+all: writer
 
-writer: writer.c 
-		$(CC) writer.c -o writer
+writer: writer.c
+	$(CC) writer.c -o writer
 
-clean: 
+clean:
 	rm -f *.o writer

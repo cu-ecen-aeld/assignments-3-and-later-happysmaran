@@ -1,9 +1,9 @@
-ifndef CROSS_COMPILE
-override CROSS_COMPILE=
-endif
+CC := $(CROSS_COMPILE)gcc
 
-writer:
-	$(CROSS_COMPILE)gcc -o writer writer.c
+all: writer
+
+writer: writer.c
+	$(CC) writer.c -o writer
 
 clean:
-	rm -f writer
+	rm -f *.o writer

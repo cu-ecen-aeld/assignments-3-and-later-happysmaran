@@ -1,241 +1,286 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
+#include <math.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
-#include <syslog.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/syslog.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define PORT 9000
 #define BACKLOG 10
-#define DATA_FILE "/var/tmp/aesdsocketdata"
-#define BUFFER_SIZE 1024
+#define FILENAME "/var/tmp/aesdsocketdata"
+#define FALSE 0
+#define TRUE 1
 
-// Global flag set by signal handler
-volatile sig_atomic_t g_exit_signal_received = 0;
+typedef struct pthread_arg_t {
+    int new_socket_fd;
+    struct sockaddr_in client_address;
+} pthread_arg_t;
 
-// Signal handler to set termination flag
-static void signal_handler(int sig) {
-    if (sig == SIGINT || sig == SIGTERM) {
-        g_exit_signal_received = 1;
-        syslog(LOG_INFO, "Caught signal %s, exiting", (sig == SIGINT) ? "SIGINT" : "SIGTERM");
-    }
-}
+int socket_fd = -1;
+int file_fd = -1;
+pthread_mutex_t fileFD;
+atomic_bool timeStamp = FALSE;
 
-// Set up signal handling
-static void setup_signals() {
-    struct sigaction sa = {0};
-    sa.sa_handler = signal_handler;
+void *pthread_routine(void *arg);
 
-    if (sigaction(SIGINT, &sa, NULL) == -1 ||
-        sigaction(SIGTERM, &sa, NULL) == -1) {
-        perror("Failed to set up signal handling");
-        exit(EXIT_FAILURE);
-    }
-}
+static void timerSetup();
 
-// Create and bind a listening TCP socket
-static int create_listening_socket() {
-    int sockfd;
-    struct sockaddr_in addr = {0};
-    int opt = 1;
+static void tmpfileOpen();
 
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        syslog(LOG_ERR, "socket failed: %s", strerror(errno));
-        return -1;
-    }
+void *fileWrite(char* textbuffer);
 
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
-        syslog(LOG_ERR, "setsockopt failed: %s", strerror(errno));
-        close(sockfd);
-        return -1;
-    }
+void signal_handler(int sig, siginfo_t *si, void *uc);
 
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
-
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-        syslog(LOG_ERR, "bind failed: %s", strerror(errno));
-        close(sockfd);
-        return -1;
-    }
-
-    if (listen(sockfd, BACKLOG) == -1) {
-        syslog(LOG_ERR, "listen failed: %s", strerror(errno));
-        close(sockfd);
-        return -1;
-    }
-
-    return sockfd;
-}
-
-// Run the process in daemon mode
-static void daemonize() {
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        syslog(LOG_ERR, "fork failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (pid > 0) {
-        exit(EXIT_SUCCESS);
-    }
-
-    if (setsid() == -1) {
-        syslog(LOG_ERR, "setsid failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    if (chdir("/") == -1) {
-        syslog(LOG_ERR, "chdir failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-}
-
-// Receive, write, and echo data
-static void handle_client(int client_fd, struct sockaddr_in *client_addr) {
-    char client_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr->sin_addr, client_ip, INET_ADDRSTRLEN);
-    syslog(LOG_INFO, "Accepted connection from %s", client_ip);
-
-    char recv_buf[BUFFER_SIZE];
-    char *packet_buf = NULL;
-    size_t packet_size = 0;
-    size_t packet_len = 0;
-    ssize_t bytes_received;
-
-    while (!g_exit_signal_received &&
-           (bytes_received = recv(client_fd, recv_buf, sizeof(recv_buf), 0)) > 0) {
-
-        if (packet_len + bytes_received > packet_size) {
-            size_t new_size = packet_len + bytes_received;
-            char *temp = realloc(packet_buf, new_size);
-            if (!temp) {
-                syslog(LOG_ERR, "realloc failed: %s", strerror(errno));
-                free(packet_buf);
-                return;
-            }
-            packet_buf = temp;
-            packet_size = new_size;
-        }
-
-        memcpy(packet_buf + packet_len, recv_buf, bytes_received);
-        packet_len += bytes_received;
-
-        char *newline = memchr(packet_buf, '\n', packet_len);
-        if (!newline) continue;
-
-        size_t complete_len = newline - packet_buf + 1;
-
-        int fd = open(DATA_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (fd == -1) {
-            syslog(LOG_ERR, "open failed: %s", strerror(errno));
-            break;
-        }
-
-        if (write(fd, packet_buf, complete_len) == -1) {
-            syslog(LOG_ERR, "write failed: %s", strerror(errno));
-        }
-        close(fd);
-
-        fd = open(DATA_FILE, O_RDONLY);
-        if (fd == -1) {
-            syslog(LOG_ERR, "open for reading failed: %s", strerror(errno));
-            break;
-        }
-
-        ssize_t read_bytes;
-        while (!g_exit_signal_received &&
-               (read_bytes = read(fd, recv_buf, sizeof(recv_buf))) > 0) {
-            ssize_t sent = 0;
-            while (sent < read_bytes) {
-                ssize_t n = send(client_fd, recv_buf + sent, read_bytes - sent, 0);
-                if (n == -1) {
-                    syslog(LOG_ERR, "send failed: %s", strerror(errno));
-                    break;
-                }
-                sent += n;
-            }
-        }
-
-        close(fd);
-
-        size_t remaining = packet_len - complete_len;
-        memmove(packet_buf, newline + 1, remaining);
-        packet_len = remaining;
-    }
-
-    if (bytes_received == -1 && errno != EINTR) {
-        syslog(LOG_ERR, "recv failed: %s", strerror(errno));
-    }
-
-    free(packet_buf);
-    close(client_fd);
-    syslog(LOG_INFO, "Closed connection from %s", client_ip);
-}
-
-// Entry point
 int main(int argc, char *argv[]) {
-    int daemon_mode = 0;
+    int new_socket_fd; //port
+    struct sockaddr_in address;
+    pthread_attr_t pthread_attr;
+    pthread_arg_t *pthread_arg;
+    pthread_t pthread;
+    socklen_t client_address_len;
+    static int yes = 1;
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-d") == 0) {
-            daemon_mode = 1;
-            break;
+    struct sigaction sa = { 0 };
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = signal_handler;
+
+    memset(&address, 0, sizeof address);
+    address.sin_family = AF_INET;
+    address.sin_port = htons(PORT);
+    address.sin_addr.s_addr = INADDR_ANY;
+
+    if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        syslog(LOG_ERR, "ERROR with socket %s", strerror(errno));
+        exit(1);
+    }
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1){
+
+        syslog(LOG_ERR, "ERROR sock options");
+        close(socket_fd);
+        return -1;
+    }
+    if (bind(socket_fd, (struct sockaddr *)&address, sizeof address) == -1) {
+        syslog(LOG_ERR, "ERROR with bind: %s", strerror(errno));
+        exit(1);
+    }
+
+    if (listen(socket_fd, BACKLOG) == -1) {
+        syslog(LOG_ERR, "ERROR with listen");
+        exit(1);
+    }
+
+    if (pthread_attr_init(&pthread_attr) != 0) {
+        syslog(LOG_ERR, "ERROR with pthread attribute initialization");
+        exit(1);
+    }
+    if (pthread_attr_setdetachstate(&pthread_attr, PTHREAD_CREATE_DETACHED) != 0) {
+        syslog(LOG_ERR, "ERROR with setting pthread state");
+        exit(1);
+    }
+    if(pthread_mutex_init(&fileFD, NULL) != 0){ 
+        syslog(LOG_ERR, "ERROR mutex init fail");
+    }
+
+    if (argc > 1){
+        if (strcmp(argv[1], "-d") == 0){
+            
+            int pid = fork();
+
+            if (pid == -1){
+                syslog(LOG_ERR, "ERROR fork");
+                close(socket_fd);
+                return -1;
+            }
+            else if (pid != 0){
+                close(socket_fd);
+                exit(EXIT_SUCCESS);
+            }
+        }
+        else {
+            syslog(LOG_ERR, "ERROR Invalid argument specified, running in foreground");
+            printf("ERROR Invalid argument specified, running in foreground\n");
         }
     }
 
-    openlog("aesdsocket", LOG_PID | LOG_CONS, LOG_USER);
+    tmpfileOpen();
+    timerSetup();
 
-    setup_signals();
-
-    int listen_fd = create_listening_socket();
-    if (listen_fd == -1) {
-        closelog();
-        return EXIT_FAILURE;
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+        syslog(LOG_ERR, "ERROR with signal: %s", strerror(errno));
+        exit(1);
+    }
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        syslog(LOG_ERR, "ERROR signal: %s", strerror(errno));
+        exit(1);
+    }
+    if (sigaction(SIGRTMIN, &sa, NULL) == -1){
+        syslog(LOG_ERR, "ERROR sigaction: %s", strerror(errno));
+        exit(-1);
     }
 
-    if (daemon_mode) {
-        daemonize();
-    }
 
-    syslog(LOG_INFO, "Listening on port %d", PORT);
+    while (1) {
 
-    while (!g_exit_signal_received) {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
+        if(timeStamp == TRUE){
+            time_t rawtime;
+            struct tm *info;
+            char *buffer = (char*)calloc(31, sizeof(char));
 
-        int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &addr_len);
-        if (client_fd == -1) {
-            if (errno == EINTR) continue;
-            syslog(LOG_ERR, "accept failed: %s", strerror(errno));
+            time(&rawtime);
+            info = localtime(&rawtime);
+            strftime(buffer,31,"timestamp:%F %H:%M:%S\n", info);
+
+            pthread_mutex_lock(&fileFD);
+            fileWrite(buffer); 
+            pthread_mutex_unlock(&fileFD);
+            syslog(LOG_DEBUG, "%s", buffer);
+
+            free(buffer);           
+            timeStamp = FALSE;
+        }
+
+        pthread_arg = (pthread_arg_t *)malloc(sizeof *pthread_arg);
+        if (!pthread_arg) {
+            syslog(LOG_ERR,"ERROR with pthread malloc");
             continue;
         }
 
-        handle_client(client_fd, &client_addr);
+        
+        client_address_len = sizeof pthread_arg->client_address;
+        new_socket_fd = accept(socket_fd, (struct sockaddr *)&pthread_arg->client_address, &client_address_len);
+        if (new_socket_fd == -1) {
+            syslog(LOG_ERR,"ERROR with accept");
+            free(pthread_arg);
+            continue;
+        }
+
+        pthread_arg->new_socket_fd = new_socket_fd;
+
+        if (pthread_create(&pthread, &pthread_attr, pthread_routine, (void *)pthread_arg) != 0) {
+            syslog(LOG_ERR,"ERROR with pthread_create");
+            free(pthread_arg);
+            continue;
+        }
     }
-
-    close(listen_fd);
-
-    if (unlink(DATA_FILE) == -1) {
-        syslog(LOG_ERR, "Failed to delete %s: %s", DATA_FILE, strerror(errno));
-    } else {
-        syslog(LOG_INFO, "Deleted file %s", DATA_FILE);
-    }
-
-    closelog();
-    return EXIT_SUCCESS;
+    free(pthread_arg);
+    return 0;
 }
 
+void *pthread_routine(void *arg) {
+    pthread_arg_t *pthread_arg = (pthread_arg_t *)arg;
+    int new_socket_fd = pthread_arg->new_socket_fd;
+    struct sockaddr_in client_address = pthread_arg->client_address;
+    
+    char client_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(client_address.sin_addr), client_ip, INET_ADDRSTRLEN);
+    syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
+
+
+    free(arg);
+
+    ssize_t bytes_read = 0;
+    char *textbuffer = (char*)calloc(1024, sizeof(char));
+
+    while ((bytes_read = recv(new_socket_fd, textbuffer, 1024, 0)) > 0) {   //Buffer set to 1kB
+        if (bytes_read == -1){
+            syslog(LOG_ERR, "ERROR with recv");
+            raise(SIGINT);
+        }
+        
+        tmpfileOpen();
+
+        pthread_mutex_lock(&fileFD);
+        fileWrite(textbuffer);
+
+        if (textbuffer[bytes_read-1] == '\n') break;
+    }
+    if (lseek(file_fd, (off_t) 0, SEEK_SET) == (off_t) -1){ //Ch
+        syslog(LOG_ERR, "ERROR with seek");
+        raise(SIGINT);
+    }
+
+    int bytes_send = 0;
+    while ((bytes_read = read(file_fd, textbuffer, 1024)) > 0){
+        while ((bytes_send = send(new_socket_fd, textbuffer, bytes_read, 0)) < bytes_read){
+            syslog(LOG_ERR, "ERROR with send");
+            raise(SIGINT);
+        }
+    }
+    pthread_mutex_unlock(&fileFD);  
+
+    free(textbuffer);
+    close(new_socket_fd);
+    syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
+    return NULL;
+}
+
+void signal_handler(int sig, siginfo_t *si, void *uc) {
+    (void)uc;
+
+    if(si->si_code == SI_TIMER){
+        timeStamp = TRUE;
+
+    } else{ 
+
+        if (file_fd >= 0 && close(file_fd)) syslog(LOG_ERR, "%s: %m", "Close file"); 
+        if (socket_fd >= 0 && close(socket_fd)) syslog(LOG_ERR, "%s: %m", "Close server descriptor"); 
+        if ((unlink(FILENAME)) == -1 ) syslog(LOG_ERR, "%s: %m", "Error deleting tmp file"); 
+        if((sig == SIGINT) | (sig ==SIGTERM)){
+            syslog(LOG_DEBUG,"%s", "Caught signal, exiting"); 
+            exit(EXIT_SUCCESS);
+        }
+
+        exit(EXIT_FAILURE);
+    }
+}
+
+void *fileWrite(char* textbuffer){
+    if ((write(file_fd, textbuffer, strnlen(textbuffer, 1024))) == -1){
+        syslog(LOG_ERR, "ERROR with write");
+    }
+    return(0);
+}
+
+static void timerSetup(){
+    timer_t timerId = 0;
+
+    struct sigevent sev = { 0 };
+    struct itimerspec its = {   .it_interval.tv_sec  = 10,
+                                .it_interval.tv_nsec = 0,
+                                .it_value.tv_sec  = 1,
+                                .it_value.tv_nsec = 0
+                            };
+    
+    sev.sigev_notify = SIGEV_SIGNAL;
+    sev.sigev_signo = SIGRTMIN;
+
+    if (timer_create(CLOCK_REALTIME, &sev, &timerId) != 0){
+        syslog(LOG_ERR,"Error timer_create: %s\n", strerror(errno));
+        exit(-1);
+    }
+        
+    if (timer_settime(timerId, 0, &its, NULL) != 0){
+        syslog(LOG_ERR,"Error timer_settime: %s\n", strerror(errno));
+        exit(-1);
+    }
+    free(timerId);
+}
+
+static void tmpfileOpen(){
+    if (file_fd < 0) {
+        file_fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 0644);
+        if (file_fd < 0) {
+            syslog(LOG_ERR, "ERROR with file open");
+            raise(SIGINT);
+        }
+    }
+}

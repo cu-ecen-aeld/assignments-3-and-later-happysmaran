@@ -16,21 +16,20 @@ jobs:
           - uses: webfactory/ssh-agent@v0.5.4
             with:
                  ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-          - name: Run build
-            timeout-minutes: 600
+          - name: Run full test
+            timeout-minutes: 15
             run: |
-              # 1. Allow any user to read/write the socket so the Docker user can connect
+              # Ensure the socket is accessible to the container user
               sudo chmod 666 $SSH_AUTH_SOCK
               
-              # 2. Run the build with the socket mounted to a standard path
               docker run --rm \
                 -v $SSH_AUTH_SOCK:/tmp/ssh_agent.sock \
                 -e SSH_AUTH_SOCK=/tmp/ssh_agent.sock \
                 -e GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" \
                 -v ${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE} \
                 -w ${GITHUB_WORKSPACE} \
-                cuaesd/aesd-autotest:24-assignment6-yocto \
-                ./build.sh
+                cuaesd/aesd-autotest:assignment6-yocto \
+                ./full-test.sh
           - name: Cleanup
             if: always()
             run: |

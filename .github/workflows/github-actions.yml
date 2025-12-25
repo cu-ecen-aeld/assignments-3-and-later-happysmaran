@@ -19,13 +19,19 @@ jobs:
           - name: Run build
             timeout-minutes: 600
             run: |
+              # 1. Relax permissions on the host socket so the container user can read it
+              # This is necessary on self-hosted runners where Docker users differ, because of course they differ
+              sudo chmod 666 $SSH_AUTH_SOCK
+              
+              # 2. Run the container WITHOUT the -u flag
+              # We mount the socket to /tmp/ssh_agent.sock which is globally readable
               docker run --rm \
                 -v $SSH_AUTH_SOCK:/tmp/ssh_agent.sock \
                 -e SSH_AUTH_SOCK=/tmp/ssh_agent.sock \
+                -e GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" \
                 -v ${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE} \
                 -w ${GITHUB_WORKSPACE} \
-                -u $(id -u):$(id -g) \
-                cuaesd/aesd-autotest:assignment6-yocto \
+                cuaesd/aesd-autotest:24-assignment6-yocto \
                 ./build.sh
           - name: Cleanup
             if: always()

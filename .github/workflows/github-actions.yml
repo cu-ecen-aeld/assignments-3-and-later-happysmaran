@@ -26,10 +26,6 @@ jobs:
                  cuaesd/aesd-autotest:24-assignment6-yocto \
                  --workdir=${GITHUB_WORKSPACE} \
                  ./build.sh
-          - name: Cleanup
-            if: always()
-            run: |
-              ssh-add -D
           - name: Run full test
             timeout-minutes: 15
             run: |
@@ -44,3 +40,7 @@ jobs:
                 -w ${GITHUB_WORKSPACE} \
                 cuaesd/aesd-autotest:assignment6-yocto \
                 ./full-test.sh
+          - name: Cleanup
+            if: always()
+            run: |
+              ssh-add -D

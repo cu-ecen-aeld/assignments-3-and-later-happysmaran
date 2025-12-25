@@ -17,16 +17,16 @@ jobs:
             with:
                  ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
           - name: Run build
-                timeout-minutes: 600
-                run: |
-                  docker run --rm \
-                    -v $SSH_AUTH_SOCK:/tmp/ssh_agent.sock \
-                    -e SSH_AUTH_SOCK=/tmp/ssh_agent.sock \
-                    -v ${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE} \
-                    -w ${GITHUB_WORKSPACE} \
-                    -u $(id -u):$(id -g) \
-                    cuaesd/aesd-autotest:assignment6-yocto \
-                    ./build.sh
+            timeout-minutes: 600
+            run: |
+              docker run --rm \
+                -v $SSH_AUTH_SOCK:/tmp/ssh_agent.sock \
+                -e SSH_AUTH_SOCK=/tmp/ssh_agent.sock \
+                -v ${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE} \
+                -w ${GITHUB_WORKSPACE} \
+                -u $(id -u):$(id -g) \
+                cuaesd/aesd-autotest:assignment6-yocto \
+                ./build.sh
           - name: Cleanup
             if: always()
             run: |

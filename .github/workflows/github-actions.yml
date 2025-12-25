@@ -19,12 +19,10 @@ jobs:
           - name: Run build
             timeout-minutes: 600
             run: |
-              # 1. Relax permissions on the host socket so the container user can read it
-              # This is necessary on self-hosted runners where Docker users differ, because of course they differ
+              # 1. Allow any user to read/write the socket so the Docker user can connect
               sudo chmod 666 $SSH_AUTH_SOCK
               
-              # 2. Run the container WITHOUT the -u flag
-              # We mount the socket to /tmp/ssh_agent.sock which is globally readable
+              # 2. Run the build with the socket mounted to a standard path
               docker run --rm \
                 -v $SSH_AUTH_SOCK:/tmp/ssh_agent.sock \
                 -e SSH_AUTH_SOCK=/tmp/ssh_agent.sock \

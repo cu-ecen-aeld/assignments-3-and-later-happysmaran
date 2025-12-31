@@ -29,36 +29,9 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    uint8_t cur_buf_size = 0, index = 0;
-    struct aesd_buffer_entry *cur;
-
-    // always check for nulls, we hate em
-    if(buffer == NULL || entry_offset_byte_rtn == NULL) {
-        return NULL;
-    }
-
-    index = buffer->out_offs;
-    cur = &buffer->entry[index];
-    do {
-        if(char_offset >= cur_buf_size && char_offset < (cur_buf_size + cur->size)) {
-            *entry_offset_byte_rtn = char_offset - cur_buf_size;
-            //DEBUG("For global offset %d, found offset %d\n", (int)char_offset, (int)*entry_offset_byte_rtn);
-            //DEBUG("Inside of string: %s\n", cur->buffptr);
-            return cur;
-        }
-
-        if(cur->buffptr != NULL) {
-            cur_buf_size += cur->size;
-        }
-
-        index++;
-        if(index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
-            index = 0;
-        }
-        cur = &buffer->entry[index];
-
-    } while(index != buffer->out_offs);
-
+    /**
+    * TODO: implement per description
+    */
     return NULL;
 }
 
@@ -71,35 +44,9 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    // More null pointer checks
-    if(buffer == NULL || add_entry == NULL) {
-        //DEBUG("Error: null pointer passed!\n");
-        return;
-    }
-
-    buffer->entry[buffer->in_offs].size = add_entry->size;
-    buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
-
-    if(buffer->in_offs + 1 >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
-        buffer->in_offs = 0;
-    } else {
-        buffer->in_offs++;
-    }
-
-    if(buffer->in_offs == buffer->out_offs || buffer->full == true) {
-        buffer->full = true;
-
-        buffer->out_offs = buffer->in_offs;
-    }
-
-
-    //DEBUG("buffer: {\n");
-    for(int i=0; i<10; i++) {
-        if(buffer->entry[i].buffptr != NULL) {
-            
-        }
-    }
-    //DEBUG("}\n");
+    /**
+    * TODO: implement per description
+    */
 }
 
 /**

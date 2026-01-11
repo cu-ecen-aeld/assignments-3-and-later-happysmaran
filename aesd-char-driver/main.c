@@ -182,7 +182,70 @@ void aesd_cleanup_module(void)
     unregister_chrdev_region(devno, 1);
 }
 
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+    struct aesd_dev *dev = filp->private_data;
+    loff_t total_size = 0;
+    struct aesd_buffer_entry *entry;
+    uint8_t index;
 
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
+
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
+        total_size += entry->size;
+    }
+
+    loff_t new_pos = fixed_size_llseek(filp, offset, whence, total_size);
+    
+    mutex_unlock(&dev->lock);
+    return new_pos;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC || _IOC_NR(cmd) > AESDCHAR_IOC_MAXNR)
+        return -ENOTTY;
+
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_seekto seekto;
+
+    if (cmd == AESDCHAR_IOCSEEKTO) {
+        if (copy_from_user(&seekto, (struct aesd_seekto __user *)arg, sizeof(seekto)))
+            return -EFAULT;
+
+        if (mutex_lock_interruptible(&dev->lock))
+            return -ERESTARTSYS;
+
+        long retval = 0;
+        uint32_t total_commands = 0;
+        struct aesd_buffer_entry *entry;
+        uint8_t index;
+        
+ 
+        AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
+            total_commands++;
+        }
+
+        if (seekto.write_cmd >= total_commands || 
+            seekto.write_cmd_offset >= dev->buffer.entry[
+                (dev->buffer.out_offs + seekto.write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED
+            ].size) {
+            retval = -EINVAL;
+        } else {
+            loff_t final_pos = 0;
+            for (int i = 0; i < seekto.write_cmd; i++) {
+                final_pos += dev->buffer.entry[(dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size;
+            }
+            final_pos += seekto.write_cmd_offset;
+            filp->f_pos = final_pos;
+        }
+
+        mutex_unlock(&dev->lock);
+        return retval;
+    }
+    return -ENOTTY;
+}
 
 module_init(aesd_init_module);
 module_exit(aesd_cleanup_module);

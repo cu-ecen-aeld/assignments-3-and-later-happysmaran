@@ -115,12 +115,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     return count;
     return retval;
 }
+
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
+    .owner =          THIS_MODULE,
+    .read =           aesd_read,
+    .write =          aesd_write,
+    .open =           aesd_open,
+    .release =        aesd_release,
+    .llseek =         aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

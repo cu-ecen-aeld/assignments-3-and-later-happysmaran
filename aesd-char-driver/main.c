@@ -63,10 +63,12 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
         return -ERESTARTSYS;
 
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset_byte);
+    
+    printk(KERN_DEBUG "AESDREAD: Reading from f_pos %lld, count %zu\n", *f_pos, count);
 
     if (entry) {
         size_t available = entry->size - entry_offset_byte;
-        bytes_to_read = (available < count) ? available : count;
+        bytes_to_read = (available < count) ? available : count;\
 
         if (copy_to_user(buf, entry->buffptr + entry_offset_byte, bytes_to_read)) {
             bytes_to_read = -EFAULT;
@@ -129,18 +131,13 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
-    // Calculate the current total size of the buffer
+    // Calculate total size for SEEK_END and bounds checking
     AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
         total_size += entry->size;
     }
 
-    // Use the kernel helper to calculate the new offset based on total_size
+    // fixed_size_llseek is the standard for char devices with a defined size
     retval = fixed_size_llseek(filp, offset, whence, total_size);
-    
-    // Check bounds: generic_llseek doesn't know our total_size limit
-    if (retval < 0 || retval > total_size) {
-        retval = fixed_size_llseek(filp, offset, whence, total_size);
-    }
 
     mutex_unlock(&dev->lock);
     return retval;

@@ -1,9 +1,10 @@
 #!/bin/sh
 
-case $1 in
+case "$1" in
     start)
-        echo "Starting aesdchar driver"
-        /usr/bin/aesdchar_load
+        echo "Loading aesdchar driver"
+        # Make sure this path matches where Buildroot installs it!
+        /usr/bin/aesdchar_load 
         
         echo "Starting aesdsocket"
         start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d

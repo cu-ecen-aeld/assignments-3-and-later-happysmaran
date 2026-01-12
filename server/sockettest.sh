@@ -7,6 +7,15 @@ tempfile() {
     mktemp
 }
 
+# This ensures we aren't talking to a "hung" daemon from a previous stage
+killall -9 aesdsocket 2>/dev/null
+/usr/bin/aesdchar_unload 2>/dev/null
+/usr/bin/aesdchar_load
+
+# This solves the race condition where the script is faster than the bind()
+/usr/bin/aesdsocket -d
+sleep 2
+
 target=localhost
 port=9000
 rc=0

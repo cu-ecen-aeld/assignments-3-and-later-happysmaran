@@ -131,25 +131,31 @@ void *pthread_routine(void *arg) {
     }
 
     // --- ACCESSING THE DRIVER ---
-    int dev_fd = open("/dev/aesdchar", O_RDWR);
+    if (total_size > 0) {
+    int dev_fd = open(FILENAME, O_RDWR);
     if (dev_fd >= 0) {
         if (ioctl_performed) {
-            ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto);
+            // sockettest.sh expects readback STARTING from the seek position
+            if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) != 0) {
+                syslog(LOG_ERR, "IOCTL failed: %m");
+            }
+            // DO NOT lseek(0) here, or you undo the seek!
         } else {
-            // Write to driver 
-            write(dev_fd, textbuffer, bytes_received);
-            // REWIND so the subsequent read starts at the beginning 
-            lseek(dev_fd, 0, SEEK_SET); 
+            // Normal write: write everything we received
+            write(dev_fd, full_content, total_size);
+            // REWIND to beginning to send back the full history
+            lseek(dev_fd, 0, SEEK_SET);
         }
 
-        // Read everything back and send to client
+        // Read until EOF and send to socket
+        char read_buf[1024];
+        ssize_t bytes_read;
         while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
             send(client_fd, read_buf, bytes_read, 0);
         }
-
-        // CLOSE IMMEDIATELY so the test script can run rmmod 
-        close(dev_fd); 
+        close(dev_fd);
     }
+}
 
     close(dev_fd);
     close(client_fd);

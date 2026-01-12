@@ -132,33 +132,36 @@ long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t wri
     struct aesd_dev *dev = filp->private_data;
     size_t total_offset = 0;
     int i;
+    long retval = 0;
 
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
-    // Validate command index exists
-    if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED || 
-        dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].buffptr == NULL) {
-        mutex_unlock(&dev->lock);
-        return -EINVAL;
+    // 1. Calculate the index in the circular buffer
+    // The test sends 0-indexed commands relative to current contents
+    uint8_t index = (dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+    // 2. Bounds check
+    if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED || dev->buffer.entry[index].buffptr == NULL) {
+        retval = -EINVAL;
+        goto unlock;
+    }
+    if (write_cmd_offset >= dev->buffer.entry[index].size) {
+        retval = -EINVAL;
+        goto unlock;
     }
 
-    // Validate offset is within that entry
-    if (write_cmd_offset >= dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size) {
-        mutex_unlock(&dev->lock);
-        return -EINVAL;
-    }
-
-    // Calculate absolute position
+    // 3. Calculate offset to the start of the requested command
     for (i = 0; i < write_cmd; i++) {
         total_offset += dev->buffer.entry[(dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size;
     }
-    total_offset += write_cmd_offset;
+    
+    // 4. Set f_pos to start of command + internal offset
+    filp->f_pos = total_offset + write_cmd_offset;
 
-    filp->f_pos = total_offset;
-
+unlock:
     mutex_unlock(&dev->lock);
-    return 0;
+    return retval;
 }
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)

@@ -59,29 +59,31 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 {
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *entry;
-    size_t entry_offset_byte = 0;
-    ssize_t bytes_to_read = 0;
+    size_t entry_offset_byte_rtn = 0;
+    ssize_t retval = 0;
 
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
-    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset_byte);
-    
-    printk(KERN_DEBUG "AESDREAD: Reading from f_pos %lld, count %zu\n", *f_pos, count);
+    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset_byte_rtn);
 
-    if (entry) {
-        size_t available = entry->size - entry_offset_byte;
-        bytes_to_read = (available < count) ? available : count;
+    if (entry == NULL) {
+        mutex_unlock(&dev->lock);
+        return 0; 
+    }
 
-        if (copy_to_user(buf, entry->buffptr + entry_offset_byte, bytes_to_read)) {
-            bytes_to_read = -EFAULT;
-        } else {
-            *f_pos += bytes_to_read;
-        }
+    size_t remaining_in_entry = entry->size - entry_offset_byte_rtn;
+    size_t bytes_to_copy = (remaining_in_entry < count) ? remaining_in_entry : count;
+
+    if (copy_to_user(buf, entry->buffptr + entry_offset_byte_rtn, bytes_to_copy)) {
+        retval = -EFAULT;
+    } else {
+        retval = bytes_to_copy;
+        *f_pos += bytes_to_copy;
     }
 
     mutex_unlock(&dev->lock);
-    return bytes_to_read;
+    return retval;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
@@ -111,9 +113,9 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
         new_entry.size = dev->partial_entry_size;
 
         const char *overwritten_ptr = aesd_circular_buffer_add_entry(&dev->buffer, &new_entry);
-        if (overwritten_ptr) {
-            kfree(overwritten_ptr);
-        }
+		if (overwritten_ptr) {
+			kfree(overwritten_ptr);
+		}
 
         dev->partial_entry_ptr = NULL;
         dev->partial_entry_size = 0;

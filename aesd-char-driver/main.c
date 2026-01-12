@@ -65,6 +65,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
+    // Translate global f_pos to a specific buffer entry and offset within that entry
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset_byte_rtn);
 
     if (entry == NULL) {
@@ -79,7 +80,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
         retval = -EFAULT;
     } else {
         retval = bytes_to_copy;
-        *f_pos += bytes_to_copy;
+        *f_pos += bytes_to_copy; // Move the pointer forward for the next read call
     }
 
     mutex_unlock(&dev->lock);
@@ -199,43 +200,26 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     return -ENOTTY;
 }
 
-static long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset)
+long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset)
 {
     struct aesd_dev *dev = filp->private_data;
-    struct aesd_buffer_entry *entry;
+    size_t total_offset = 0;
     int i;
-    uint32_t index;
-    long new_fpos = 0;
 
-    // 1. Calculate the total number of entries currently in the buffer
-    uint32_t entries_count = 0;
-    AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
-        entries_count++;
-    }
+    // 1. Check command validity
+    if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) return -EINVAL;
+    if (write_cmd_offset >= dev->buffer.entry[write_cmd].size) return -EINVAL;
 
-    // 2. Bounds check: Is the requested command index valid?
-    if (write_cmd >= entries_count) {
-        return -EINVAL;
-    }
-
-    // 3. Bounds check: Is the offset within that specific entry valid?
-    // Use the out_offs + write_cmd logic to find the correct physical entry
-    uint32_t char_index = (dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-    if (write_cmd_offset >= dev->buffer.entry[char_index].size) {
-        return -EINVAL;
-    }
-
-    // 4. Sum up the sizes of all entries preceding the target entry
+    // 2. Calculate offset by summing lengths of previous commands
     for (i = 0; i < write_cmd; i++) {
-        uint32_t prev_index = (dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-        new_fpos += dev->buffer.entry[prev_index].size;
+        total_offset += dev->buffer.entry[i].size;
     }
+    
+    // 3. Add the offset within the target command
+    total_offset += write_cmd_offset;
 
-    // 5. Add the offset within the target entry to get the global position
-    new_fpos += write_cmd_offset;
-
-    // 6. Update the file pointer
-    filp->f_pos = new_fpos;
+    // 4. Update the file pointer
+    filp->f_pos = total_offset;
 
     return 0;
 }

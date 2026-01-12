@@ -160,6 +160,9 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
         if (mutex_lock_interruptible(&dev->lock))
             return -ERESTARTSYS;
+            
+        retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+		mutex_unlock(&aesd_device.lock);
 
         // Count current valid commands in buffer
         AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {

@@ -105,7 +105,7 @@ void *pthread_routine(void *arg) {
     int ioctl_performed = 0;
     struct aesd_seekto seekto;
 
-    // 1. Receive data and accumulate in full_content until a newline is found
+    // 1. Accumulate data
     while ((bytes_received = recv(client_fd, recv_buf, sizeof(recv_buf), 0)) > 0) {
         char *new_ptr = realloc(full_content, total_received + bytes_received);
         if (!new_ptr) {
@@ -116,44 +116,55 @@ void *pthread_routine(void *arg) {
         memcpy(full_content + total_received, recv_buf, bytes_received);
         total_received += bytes_received;
 
-        // Break if we found a newline in the chunk just received
-        if (memchr(recv_buf, '\n', bytes_received)) break;
+        // Break early if newline is found, as per Assignment requirements
+        if (memchr(recv_buf, '\n', bytes_received)) {
+            break;
+        }
     }
 
+    // 2. Only process if we actually got something
     if (total_received > 0) {
         int dev_fd = open(FILENAME, O_RDWR);
-        if (dev_fd >= 0) {
-            // Check for IOCTL string: "AESDCHAR_IOCSEEKTO:X,Y"
-            if (total_received >= 19 && strncmp(full_content, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
-                // Null-terminate a temporary copy for sscanf
-                char *tmp = malloc(total_received + 1);
-                if (tmp) {
-                    memcpy(tmp, full_content, total_received);
-                    tmp[total_received] = '\0';
-                    if (sscanf(tmp + 19, "%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
-                        if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
-                            ioctl_performed = 1;
-                        }
-                    }
-                    free(tmp);
-                }
-            }
-
-            if (!ioctl_performed) {
-                // Regular write for strings like "swrite1"
-                write(dev_fd, full_content, total_received);
-                // Rewind to 0 so the subsequent read sends back the full content history
-                lseek(dev_fd, 0, SEEK_SET);
-            }
-
-            // Read the driver content (either from 0 or from the seek point) and send back to client
-            char read_buf[1024];
-            ssize_t bytes_read;
-            while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
-                send(client_fd, read_buf, bytes_read, 0);
-            }
-            close(dev_fd);
+        if (dev_fd < 0) {
+            syslog(LOG_ERR, "Could not open %s: %m", FILENAME);
+            goto cleanup;
         }
+
+        // Check for IOCTL string: "AESDCHAR_IOCSEEKTO:X,Y"
+        if (total_received >= 19 && strncmp(full_content, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
+            char *tmp = malloc(total_received + 1);
+            if (tmp) {
+                memcpy(tmp, full_content, total_received);
+                tmp[total_received] = '\0';
+                if (sscanf(tmp + 19, "%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
+                    if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
+                        ioctl_performed = 1;
+                    }
+                }
+                free(tmp);
+            }
+        }
+
+        if (!ioctl_performed) {
+            // Write the string (including the newline we just verified)
+            if (write(dev_fd, full_content, total_received) != total_received) {
+                syslog(LOG_ERR, "Partial write to driver");
+            }
+            // Rewind to 0 to send the full history as expected by swrite tests
+            lseek(dev_fd, 0, SEEK_SET);
+        }
+
+        // 3. Send back the driver contents
+        char read_buf[1024];
+        ssize_t bytes_read;
+        // sockettest.sh is very sensitive to these bytes
+        while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
+            if (send(client_fd, read_buf, bytes_read, 0) < 0) {
+                syslog(LOG_ERR, "Send failed: %m");
+                break;
+            }
+        }
+        close(dev_fd);
     }
 
 cleanup:

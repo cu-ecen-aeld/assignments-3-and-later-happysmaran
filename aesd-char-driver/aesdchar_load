@@ -3,6 +3,11 @@ module=aesdchar
 device=aesdchar
 mode="664"
 
+# Ensure tempfile utility exists for the test script
+if ! command -v tempfile > /dev/null; then
+    ln -sf /bin/mktemp /usr/bin/tempfile
+fi
+
 # 1. Clean up any existing instances of the device node
 rm -f /dev/${device}
 

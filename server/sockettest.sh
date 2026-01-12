@@ -1,6 +1,8 @@
 #!/bin/bash
 # Tester script for sockets using Netcat
 
+sleep 10
+
 tempfile() {
     mktemp
 }

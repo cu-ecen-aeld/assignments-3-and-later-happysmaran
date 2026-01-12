@@ -121,22 +121,23 @@ void *pthread_routine(void *arg) {
 
     const char *ioctl_header = "AESDCHAR_IOCSEEKTO:";
     
+    int ioctl_performed = FALSE; // Add this flag
+
     while ((bytes_received = recv(client_fd, textbuffer, buffer_size - 1, 0)) > 0) {
         textbuffer[bytes_received] = '\0';
 
-        // Check for IOCTL Command
         if (strncmp(textbuffer, ioctl_header, strlen(ioctl_header)) == 0) {
             struct aesd_seekto seekto;
             if (sscanf(textbuffer + strlen(ioctl_header), "%u,%u", 
                        &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
                 
-                syslog(LOG_DEBUG, "Performing IOCTL seek to %u, %u", seekto.write_cmd, seekto.write_cmd_offset);
-                if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) != 0) {
+                if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
+                    ioctl_performed = TRUE; // Mark that we did a seek
+                } else {
                     syslog(LOG_ERR, "IOCTL failed: %m");
                 }
             }
         } else {
-            // Normal Write
             pthread_mutex_lock(&fileFD);
             write(dev_fd, textbuffer, bytes_received);
             pthread_mutex_unlock(&fileFD);
@@ -145,7 +146,10 @@ void *pthread_routine(void *arg) {
         if (strchr(textbuffer, '\n')) break;
     }
 
-    // Read back from the current position (Seek results or full file)
+    if (!ioctl_performed) {
+        // If no seek was commanded, we must rewind to read all data for Assignment 8/9 tests
+        lseek(dev_fd, 0, SEEK_SET);
+    }
 
     char read_buf[1024];
     ssize_t bytes_read;

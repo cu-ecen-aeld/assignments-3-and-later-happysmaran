@@ -177,9 +177,9 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 // Success: Calculate absolute byte position
                 loff_t final_pos = 0;
                 for (int i = 0; i < seekto.write_cmd; i++) {
-                    int idx = (dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-                    final_pos += dev->buffer.entry[idx].size;
-                }
+					int idx = (dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+					final_pos += dev->buffer.entry[idx].size;
+				}
                 final_pos += seekto.write_cmd_offset;
                 filp->f_pos = final_pos;
             }

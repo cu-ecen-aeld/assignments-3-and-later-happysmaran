@@ -124,18 +124,26 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
     loff_t total_size = 0;
     struct aesd_buffer_entry *entry;
     uint8_t index;
+    loff_t retval;
 
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
+    // Calculate the current total size of the buffer
     AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
         total_size += entry->size;
     }
 
-    loff_t new_pos = fixed_size_llseek(filp, offset, whence, total_size);
+    // Use the kernel helper to calculate the new offset based on total_size
+    retval = generic_llseek(filp, offset, whence);
     
+    // Check bounds: generic_llseek doesn't know our total_size limit
+    if (retval < 0 || retval > total_size) {
+        retval = fixed_size_llseek(filp, offset, whence, total_size);
+    }
+
     mutex_unlock(&dev->lock);
-    return new_pos;
+    return retval;
 }
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)

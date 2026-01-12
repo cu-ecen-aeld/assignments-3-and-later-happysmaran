@@ -150,8 +150,9 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-    long retval = 0;
+    struct aesd_dev *dev = filp->private_data;
     struct aesd_seekto seekto;
+    long retval = 0;
 
     if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC || _IOC_NR(cmd) > AESDCHAR_IOC_MAXNR)
         return -ENOTTY;
@@ -160,7 +161,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&seekto, (struct aesd_seekto __user *)arg, sizeof(seekto)))
             return -EFAULT;
 
-        // Perform the adjustment logic inside the helper function
+        // Perform adjustment logic
         retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
         return retval;
     }
@@ -172,33 +173,32 @@ long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t wri
     struct aesd_dev *dev = filp->private_data;
     size_t total_offset = 0;
     int i;
-    uint32_t total_commands = 0;
-    struct aesd_buffer_entry *entry;
-    uint8_t index;
 
     if (mutex_lock_interruptible(&dev->lock))
         return -ERESTARTSYS;
 
-    // 1. Calculate how many valid entries we actually have
-    AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
-        if (entry->buffptr != NULL) total_commands++;
-    }
-
-    // 2. Validate input bounds
-    if (write_cmd >= total_commands || 
-        write_cmd_offset >= dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size) {
+    // 1. Check if the command index is valid
+    if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED || 
+        dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].buffptr == NULL) {
         mutex_unlock(&dev->lock);
         return -EINVAL;
     }
 
-    // 3. Calculate absolute position
+    // 2. Check if the offset is within the size of that entry
+    if (write_cmd_offset >= dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size) {
+        mutex_unlock(&dev->lock);
+        return -EINVAL;
+    }
+
+    // 3. Calculate absolute byte position
     for (i = 0; i < write_cmd; i++) {
         total_offset += dev->buffer.entry[(dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size;
     }
     total_offset += write_cmd_offset;
 
-    // 4. Update file position and exit
+    // 4. Update the actual file pointer
     filp->f_pos = total_offset;
+
     mutex_unlock(&dev->lock);
     return 0;
 }
@@ -211,6 +211,7 @@ struct file_operations aesd_fops = {
     .release =        aesd_release,
     .llseek =         aesd_llseek,
     .unlocked_ioctl = aesd_ioctl,
+    .compat_ioctl =   compat_ptr_ioctl, // 6.x kernel support
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

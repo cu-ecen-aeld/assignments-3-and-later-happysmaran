@@ -112,48 +112,43 @@ void *pthread_routine(void *arg) {
     char read_buf[1024];
     ssize_t bytes_received;
     ssize_t bytes_read;
-    int ioctl_performed = 0; 
-    const char *ioctl_header = "AESDCHAR_IOCSEEKTO:";
+    int ioctl_performed = 0;
+    struct aesd_seekto seekto;
 
-    int dev_fd = open(FILENAME, O_RDWR);
-    if (dev_fd < 0) {
-        close(client_fd);
-        free(textbuffer);
-        free(arg);
-        return NULL;
-    }
-
-    // Receive loop
+    // Receive until newline
     while ((bytes_received = recv(client_fd, textbuffer, 1023, 0)) > 0) {
         textbuffer[bytes_received] = '\0';
-
-        // 1. Check for IOCTL Command
-        if (strncmp(textbuffer, ioctl_header, strlen(ioctl_header)) == 0) {
-            struct aesd_seekto seekto;
-            if (sscanf(textbuffer + strlen(ioctl_header), "%u,%u", 
-                       &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
-                if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
-                    ioctl_performed = 1;
-                }
+        
+        // Check for IOCTL string format
+        if (strncmp(textbuffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
+            if (sscanf(textbuffer + 19, "%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
+                ioctl_performed = 1;
             }
         } else {
-            // 2. Normal Write
-            pthread_mutex_lock(&fileFD);
-            write(dev_fd, textbuffer, bytes_received);
-            pthread_mutex_unlock(&fileFD);
+            // Append to your temporary file or buffer logic here
         }
-
         if (strchr(textbuffer, '\n')) break;
     }
 
-    // 3. Pointer Adjustment: ONLY lseek if we didn't just do an IOCTL
-    if (!ioctl_performed) {
-        lseek(dev_fd, 0, SEEK_SET);
-    }
+    // --- ACCESSING THE DRIVER ---
+    int dev_fd = open("/dev/aesdchar", O_RDWR);
+    if (dev_fd >= 0) {
+        if (ioctl_performed) {
+            ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto);
+        } else {
+            // Write to driver 
+            write(dev_fd, textbuffer, bytes_received);
+            // REWIND so the subsequent read starts at the beginning 
+            lseek(dev_fd, 0, SEEK_SET); 
+        }
 
-    // 4. Read back everything from current position to end of file
-    while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
-        send(client_fd, read_buf, bytes_read, 0);
+        // Read everything back and send to client
+        while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
+            send(client_fd, read_buf, bytes_read, 0);
+        }
+
+        // CLOSE IMMEDIATELY so the test script can run rmmod 
+        close(dev_fd); 
     }
 
     close(dev_fd);

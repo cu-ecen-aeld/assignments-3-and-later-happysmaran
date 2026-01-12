@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-// Include the header from your driver directory
+// Include the header from driver directory
 #include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT 9000
@@ -29,7 +29,6 @@ typedef struct pthread_arg_t {
 } pthread_arg_t;
 
 int socket_fd = -1;
-int file_fd = -1;
 pthread_mutex_t fileFD;
 
 void *pthread_routine(void *arg);
@@ -57,19 +56,25 @@ int main(int argc, char *argv[]) {
     address.sin_addr.s_addr = INADDR_ANY;
 
     if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        fprintf(stderr, "Socket creation failed: %s\n", strerror(errno));
         syslog(LOG_ERR, "Socket creation failed: %m");
         exit(1);
     }
 
-    setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+        syslog(LOG_ERR, "setsockopt failed: %m");
+    }
 
     if (bind(socket_fd, (struct sockaddr *)&address, sizeof address) == -1) {
+        fprintf(stderr, "Bind failed on port %d: %s\n", PORT, strerror(errno));
         syslog(LOG_ERR, "Bind failed: %m");
+        close(socket_fd);
         exit(1);
     }
 
     if (listen(socket_fd, BACKLOG) == -1) {
         syslog(LOG_ERR, "Listen failed: %m");
+        close(socket_fd);
         exit(1);
     }
 
@@ -85,6 +90,8 @@ int main(int argc, char *argv[]) {
 
     while (1) {
         pthread_arg = (pthread_arg_t *)malloc(sizeof *pthread_arg);
+        if (!pthread_arg) continue;
+
         client_address_len = sizeof pthread_arg->client_address;
         new_socket_fd = accept(socket_fd, (struct sockaddr *)&pthread_arg->client_address, &client_address_len);
         
@@ -121,18 +128,17 @@ void *pthread_routine(void *arg) {
         return NULL;
     }
 
-    // Receive loop
     while ((bytes_received = recv(client_fd, textbuffer, 1023, 0)) > 0) {
         textbuffer[bytes_received] = '\0';
 
-        // Check for IOCTL Command
         if (strncmp(textbuffer, ioctl_header, strlen(ioctl_header)) == 0) {
             struct aesd_seekto seekto;
             if (sscanf(textbuffer + strlen(ioctl_header), "%u,%u", 
                        &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
                 
+                syslog(LOG_DEBUG, "Executing IOCTL: cmd %u, offset %u", seekto.write_cmd, seekto.write_cmd_offset);
                 if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
-                    ioctl_performed = 1; // Mark that we performed a seek
+                    ioctl_performed = 1; 
                 } else {
                     syslog(LOG_ERR, "IOCTL failed: %m");
                 }
@@ -140,7 +146,9 @@ void *pthread_routine(void *arg) {
         } else {
             // Normal Write
             pthread_mutex_lock(&fileFD);
-            write(dev_fd, textbuffer, bytes_received);
+            if (write(dev_fd, textbuffer, bytes_received) == -1) {
+                syslog(LOG_ERR, "Write to driver failed: %m");
+            }
             pthread_mutex_unlock(&fileFD);
         }
 
@@ -148,10 +156,11 @@ void *pthread_routine(void *arg) {
     }
 
     if (!ioctl_performed) {
+        // If it was a normal write, rewind to start so we can read back all contents
         lseek(dev_fd, 0, SEEK_SET);
     }
 
-    // Read back and send to socket
+    // Read loop: sends from f_pos to end of file
     while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
         send(client_fd, read_buf, bytes_read, 0);
     }

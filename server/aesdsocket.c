@@ -109,6 +109,8 @@ void *pthread_routine(void *arg) {
     pthread_arg_t *pthread_arg = (pthread_arg_t *)arg;
     int client_fd = pthread_arg->new_socket_fd;
     char client_ip[INET_ADDRSTRLEN];
+    
+    // Local buffers and variables
     char *textbuffer = (char*)calloc(1024, sizeof(char));
     char read_buf[1024];
     ssize_t bytes_received;
@@ -119,6 +121,7 @@ void *pthread_routine(void *arg) {
     inet_ntop(AF_INET, &(pthread_arg->client_address.sin_addr), client_ip, INET_ADDRSTRLEN);
     syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
 
+    // Open the driver
     int dev_fd = open(FILENAME, O_RDWR);
     if (dev_fd < 0) {
         syslog(LOG_ERR, "Could not open %s: %m", FILENAME);
@@ -128,11 +131,15 @@ void *pthread_routine(void *arg) {
         return NULL;
     }
 
+    // --- STEP 1: RECEIVE LOOP ---
     while ((bytes_received = recv(client_fd, textbuffer, 1023, 0)) > 0) {
         textbuffer[bytes_received] = '\0';
 
+        // Check if the received string is an IOCTL command
         if (strncmp(textbuffer, ioctl_header, strlen(ioctl_header)) == 0) {
             struct aesd_seekto seekto;
+            syslog(LOG_DEBUG, "Checking IOCTL command: %s", textbuffer);
+            
             if (sscanf(textbuffer + strlen(ioctl_header), "%u,%u", 
                        &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
                 
@@ -144,32 +151,44 @@ void *pthread_routine(void *arg) {
                 }
             }
         } else {
-            // Normal Write
+            // Normal Write: protect with mutex if multiple threads access the same driver
             pthread_mutex_lock(&fileFD);
+            syslog(LOG_DEBUG, "Writing %zd bytes to driver", bytes_received);
             if (write(dev_fd, textbuffer, bytes_received) == -1) {
                 syslog(LOG_ERR, "Write to driver failed: %m");
             }
             pthread_mutex_unlock(&fileFD);
         }
 
-        if (strchr(textbuffer, '\n')) break;
+        // Break if newline found (end of transmission)
+        if (strchr(textbuffer, '\n')) {
+            break;
+        }
     }
 
+    // --- STEP 2: POINTER ADJUSTMENT ---
+    // If it was a normal write, we MUST rewind to the start to read back all content.
+    // If it was a successful IOCTL, we skip lseek to stay at the commanded position.
     if (!ioctl_performed) {
-        // If it was a normal write, rewind to start so we can read back all contents
+        syslog(LOG_DEBUG, "No IOCTL: Performing lseek to start of file");
         lseek(dev_fd, 0, SEEK_SET);
+    } else {
+        syslog(LOG_DEBUG, "IOCTL performed: Skipping lseek, reading from seek position");
     }
 
-    // Read loop: sends from f_pos to end of file
+    // --- STEP 3: READ BACK AND SEND ---
+    // Read from the current f_pos until EOF and send to client
     while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
+        syslog(LOG_DEBUG, "Read %zd bytes from driver, sending to client", bytes_read);
         send(client_fd, read_buf, bytes_read, 0);
     }
 
+    // Cleanup
+    syslog(LOG_DEBUG, "Finished processing connection from %s", client_ip);
     close(dev_fd);
     close(client_fd);
     free(textbuffer);
     free(arg);
-    syslog(LOG_DEBUG, "Closed connection from %s", client_ip);
     return NULL;
 }
 

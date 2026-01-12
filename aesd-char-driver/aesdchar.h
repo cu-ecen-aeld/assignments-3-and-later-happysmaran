@@ -25,15 +25,7 @@ struct aesd_dev
     struct cdev cdev;
 };
 
-struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
-    .llseek =   aesd_llseek,           // Added
-    .unlocked_ioctl = aesd_ioctl,      // Added
-};
+extern struct file_operations aesd_fops;
 
 // Add these prototypes so the compiler knows the signatures for the fops
 int aesd_open(struct inode *inode, struct file *filp);

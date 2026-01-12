@@ -150,12 +150,8 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-    struct aesd_dev *dev = filp->private_data;
-    struct aesd_seekto seekto;
-    uint32_t total_commands = 0;
-    struct aesd_buffer_entry *entry;
-    uint8_t index;
     long retval = 0;
+    struct aesd_seekto seekto;
 
     if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC || _IOC_NR(cmd) > AESDCHAR_IOC_MAXNR)
         return -ENOTTY;
@@ -164,37 +160,8 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&seekto, (struct aesd_seekto __user *)arg, sizeof(seekto)))
             return -EFAULT;
 
-        if (mutex_lock_interruptible(&dev->lock))
-            return -ERESTARTSYS;
-            
+        // Perform the adjustment logic inside the helper function
         retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
-		mutex_unlock(&aesd_device.lock);
-
-        // Count current valid commands in buffer
-        AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
-            total_commands++;
-        }
-
-        // Validate command index and offset within that command
-        if (seekto.write_cmd >= total_commands) {
-            retval = -EINVAL;
-        } else {
-            uint32_t target_idx = (dev->buffer.out_offs + seekto.write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-            if (seekto.write_cmd_offset >= dev->buffer.entry[target_idx].size) {
-                retval = -EINVAL;
-            } else {
-                // Success: Calculate absolute byte position
-                loff_t final_pos = 0;
-                for (int i = 0; i < seekto.write_cmd; i++) {
-					int idx = (dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-					final_pos += dev->buffer.entry[idx].size;
-				}
-                final_pos += seekto.write_cmd_offset;
-                filp->f_pos = final_pos;
-            }
-        }
-
-        mutex_unlock(&dev->lock);
         return retval;
     }
     return -ENOTTY;
@@ -205,22 +172,34 @@ long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t wri
     struct aesd_dev *dev = filp->private_data;
     size_t total_offset = 0;
     int i;
+    uint32_t total_commands = 0;
+    struct aesd_buffer_entry *entry;
+    uint8_t index;
 
-    // 1. Check command validity
-    if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) return -EINVAL;
-    if (write_cmd_offset >= dev->buffer.entry[write_cmd].size) return -EINVAL;
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
 
-    // 2. Calculate offset by summing lengths of previous commands
-    for (i = 0; i < write_cmd; i++) {
-        total_offset += dev->buffer.entry[i].size;
+    // 1. Calculate how many valid entries we actually have
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
+        if (entry->buffptr != NULL) total_commands++;
     }
-    
-    // 3. Add the offset within the target command
+
+    // 2. Validate input bounds
+    if (write_cmd >= total_commands || 
+        write_cmd_offset >= dev->buffer.entry[(dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size) {
+        mutex_unlock(&dev->lock);
+        return -EINVAL;
+    }
+
+    // 3. Calculate absolute position
+    for (i = 0; i < write_cmd; i++) {
+        total_offset += dev->buffer.entry[(dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size;
+    }
     total_offset += write_cmd_offset;
 
-    // 4. Update the file pointer
+    // 4. Update file position and exit
     filp->f_pos = total_offset;
-
+    mutex_unlock(&dev->lock);
     return 0;
 }
 

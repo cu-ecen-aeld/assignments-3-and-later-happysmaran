@@ -3,10 +3,11 @@
 case "$1" in
     start)
         echo "Loading aesdchar driver"
-        # Use absolute path to the load script. at this point I have no clue what is going on eeeeeeeeeeeeeeeeeeeeeeee
+        # 1. Load the driver and create the device node /dev/aesdchar
         /usr/bin/aesdchar_load
         
         echo "Starting aesdsocket"
+        # 2. Start the daemon
         start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d
         ;;
     stop)
@@ -18,4 +19,5 @@ case "$1" in
         echo "Usage: $0 {start|stop}"
         exit 1
 esac
+
 exit 0

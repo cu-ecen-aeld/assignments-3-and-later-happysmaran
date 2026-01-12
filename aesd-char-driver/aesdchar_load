@@ -3,47 +3,16 @@ module=aesdchar
 device=aesdchar
 mode="664"
 
-# Go to the directory where the script is located
-cd `dirname $0`
-
-# Determine the group (staff for Buildroot/QEMU, wheel for others)
-if grep -q '^staff:' /etc/group; then
-    group="staff"
+# Force look in /usr/bin if local file not found
+if [ -f ./$module.ko ]; then
+    insmod ./$module.ko $* || exit 1
 else
-    group="wheel"
+    # This is where Buildroot puts it
+    insmod /usr/bin/$module.ko $* || exit 1
 fi
 
-# 1. Remove any existing node and unload the module if it was already there
-rm -f /dev/${device}
-lsmod | grep -q "${module}" && rmmod ${module}
-
-# 2. Find and Load the module
-# We check local directory first, then /usr/bin where Buildroot usually puts it
-if [ -f "./${module}.ko" ]; then
-    echo "Loading local ${module}.ko"
-    insmod ./${module}.ko $* || exit 1
-elif [ -f "/usr/bin/${module}.ko" ]; then
-    echo "Loading /usr/bin/${module}.ko"
-    insmod /usr/bin/${module}.ko $* || exit 1
-else
-    echo "Error: ${module}.ko not found"
-    exit 1
-fi
-
-# 3. Get the dynamic major number assigned by the kernel
 major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
 
-if [ -z "$major" ]; then
-    echo "Error: Kernel did not assign a major number to $module"
-    exit 1
-fi
-
-# 4. Create the device node
-echo "Creating /dev/${device} with major $major"
+rm -f /dev/${device}
 mknod /dev/${device} c $major 0
-
-# 5. Set permissions
-chgrp $group /dev/${device}
-chmod $mode  /dev/${device}
-
-echo "Driver ${module} loaded successfully"
+chmod $mode /dev/${device}

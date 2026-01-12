@@ -191,6 +191,47 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     return -ENOTTY;
 }
 
+static long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset)
+{
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_buffer_entry *entry;
+    int i;
+    uint32_t index;
+    long new_fpos = 0;
+
+    // 1. Calculate the total number of entries currently in the buffer
+    uint32_t entries_count = 0;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &dev->buffer, index) {
+        entries_count++;
+    }
+
+    // 2. Bounds check: Is the requested command index valid?
+    if (write_cmd >= entries_count) {
+        return -EINVAL;
+    }
+
+    // 3. Bounds check: Is the offset within that specific entry valid?
+    // Use the out_offs + write_cmd logic to find the correct physical entry
+    uint32_t char_index = (dev->buffer.out_offs + write_cmd) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    if (write_cmd_offset >= dev->buffer.entry[char_index].size) {
+        return -EINVAL;
+    }
+
+    // 4. Sum up the sizes of all entries preceding the target entry
+    for (i = 0; i < write_cmd; i++) {
+        uint32_t prev_index = (dev->buffer.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        new_fpos += dev->buffer.entry[prev_index].size;
+    }
+
+    // 5. Add the offset within the target entry to get the global position
+    new_fpos += write_cmd_offset;
+
+    // 6. Update the file pointer
+    filp->f_pos = new_fpos;
+
+    return 0;
+}
+
 struct file_operations aesd_fops = {
     .owner =          THIS_MODULE,
     .read =           aesd_read,

@@ -98,76 +98,50 @@ int main(int argc, char *argv[]) {
 void *pthread_routine(void *arg) {
     pthread_arg_t *pthread_arg = (pthread_arg_t *)arg;
     int client_fd = pthread_arg->new_socket_fd;
+    
+    // Open the driver IMMEDIATELY when the thread starts
+    int dev_fd = open(FILENAME, O_RDWR);
+    if (dev_fd < 0) {
+        goto cleanup;
+    }
+
     char recv_buf[1024];
     char *full_content = NULL;
     size_t total_received = 0;
-    ssize_t bytes_received;
-    int ioctl_performed = 0;
-    struct aesd_seekto seekto;
+    ssize_t bytes;
 
-    // 1. Accumulate data
-    while ((bytes_received = recv(client_fd, recv_buf, sizeof(recv_buf), 0)) > 0) {
-        char *new_ptr = realloc(full_content, total_received + bytes_received);
-        if (!new_ptr) {
-            syslog(LOG_ERR, "Realloc failed");
-            goto cleanup;
-        }
+    while ((bytes = recv(client_fd, recv_buf, sizeof(recv_buf), 0)) > 0) {
+        char *new_ptr = realloc(full_content, total_received + bytes);
+        if (!new_ptr) goto cleanup;
         full_content = new_ptr;
-        memcpy(full_content + total_received, recv_buf, bytes_received);
-        total_received += bytes_received;
-
-        // Break early if newline is found, as per Assignment requirements
-        if (memchr(recv_buf, '\n', bytes_received)) {
-            break;
-        }
+        memcpy(full_content + total_received, recv_buf, bytes);
+        total_received += bytes;
+        if (memchr(recv_buf, '\n', bytes)) break;
     }
 
-    // 2. Only process if we actually got something
     if (total_received > 0) {
-        int dev_fd = open(FILENAME, O_RDWR);
-        if (dev_fd < 0) {
-            syslog(LOG_ERR, "Could not open %s: %m", FILENAME);
-            goto cleanup;
-        }
-
-        // Check for IOCTL string: "AESDCHAR_IOCSEEKTO:X,Y"
+        // Check for IOCTL
         if (total_received >= 19 && strncmp(full_content, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
-            char *tmp = malloc(total_received + 1);
-            if (tmp) {
-                memcpy(tmp, full_content, total_received);
-                tmp[total_received] = '\0';
-                if (sscanf(tmp + 19, "%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
-                    if (ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto) == 0) {
-                        ioctl_performed = 1;
-                    }
-                }
-                free(tmp);
+            struct aesd_seekto seekto;
+            if (sscanf(full_content + 19, "%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2) {
+                ioctl(dev_fd, AESDCHAR_IOCSEEKTO, &seekto);
+                // After ioctl, we do NOT lseek(0).
             }
-        }
-
-        if (!ioctl_performed) {
-            // Write the string (including the newline we just verified)
-            if (write(dev_fd, full_content, total_received) != total_received) {
-                syslog(LOG_ERR, "Partial write to driver");
-            }
-            // Rewind to 0 to send the full history as expected by swrite tests
+        } else {
+            // Normal Write
+            write(dev_fd, full_content, total_received);
             lseek(dev_fd, 0, SEEK_SET);
         }
 
-        // 3. Send back the driver contents
+        // Send back
         char read_buf[1024];
-        ssize_t bytes_read;
-        // sockettest.sh is very sensitive to these bytes
-        while ((bytes_read = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
-            if (send(client_fd, read_buf, bytes_read, 0) < 0) {
-                syslog(LOG_ERR, "Send failed: %m");
-                break;
-            }
+        while ((bytes = read(dev_fd, read_buf, sizeof(read_buf))) > 0) {
+            send(client_fd, read_buf, bytes, 0);
         }
-        close(dev_fd);
     }
 
 cleanup:
+    if (dev_fd >= 0) close(dev_fd);
     if (full_content) free(full_content);
     close(client_fd);
     free(arg);

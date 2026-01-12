@@ -135,7 +135,7 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
     }
 
     // Use the kernel helper to calculate the new offset based on total_size
-    retval = generic_llseek(filp, offset, whence);
+    retval = fixed_size_llseek(filp, offset, whence, total_size);
     
     // Check bounds: generic_llseek doesn't know our total_size limit
     if (retval < 0 || retval > total_size) {

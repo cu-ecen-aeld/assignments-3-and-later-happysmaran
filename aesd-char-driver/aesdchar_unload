@@ -1,10 +1,15 @@
 #!/bin/sh
 module=aesdchar
 device=aesdchar
+
+# Navigate to the script's directory
 cd `dirname $0`
-# invoke rmmod with all arguments we got
+
+# Invoke rmmod to remove the module from the kernel.
+# If aesdsocket is still running and has /dev/aesdchar open, this will fail.
 rmmod $module || exit 1
 
-# Remove stale nodes
-
+# Remove the device node from the filesystem to prevent stale entries.
 rm -f /dev/${device}
+
+echo "Successfully unloaded $module and removed /dev/${device}"

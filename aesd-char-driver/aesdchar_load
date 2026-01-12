@@ -3,16 +3,30 @@ module=aesdchar
 device=aesdchar
 mode="664"
 
-# Force look in /usr/bin if local file not found
+# 1. Clean up any existing instances of the device node
+rm -f /dev/${device}
+
+# 2. Force look in /usr/bin if local file not found
 if [ -f ./$module.ko ]; then
     insmod ./$module.ko $* || exit 1
 else
-    # This is where Buildroot puts it
+    # This is where Buildroot puts it in the target filesystem
     insmod /usr/bin/$module.ko $* || exit 1
 fi
 
+# 3. Retrieve the major number assigned by the kernel
 major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
 
-rm -f /dev/${device}
+# 4. Check if major number was successfully found
+if [ -z "$major" ]; then
+    echo "Error: Could not find major number for $module in /proc/devices"
+    exit 1
+fi
+
+# 5. Create the device node
 mknod /dev/${device} c $major 0
+
+# 6. Set permissions
 chmod $mode /dev/${device}
+
+echo "Successfully loaded $module with major number $major"

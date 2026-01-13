@@ -2,16 +2,25 @@
 
 case "$1" in
     start)
-        echo "Loading aesdchar driver"
-        # 1. Load the driver and create the device node /dev/aesdchar
+        echo "Preparing environment for autograder..."
+        # 1. Fix the tempfile issue permanently at runtime
+        if [ ! -e /usr/bin/tempfile ]; then
+            ln -sf /bin/mktemp /usr/bin/tempfile
+        fi
+
+        # 2. Load the driver
+        echo "Loading aesdchar driver..."
         /usr/bin/aesdchar_load
         
-        echo "Starting aesdsocket"
-        # 2. Start the daemon
+        # 3. Start the daemon
+        echo "Starting aesdsocket..."
         start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d
+        
+        # 4. Give the system a moment to settle
+        sleep 2
         ;;
     stop)
-        echo "Stopping aesdsocket"
+        echo "Stopping aesdsocket..."
         start-stop-daemon -K -n aesdsocket
         /usr/bin/aesdchar_unload
         ;;

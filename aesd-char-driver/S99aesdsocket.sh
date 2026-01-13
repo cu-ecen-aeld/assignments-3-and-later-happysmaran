@@ -3,10 +3,11 @@
 case "$1" in
     start)
         echo "Preparing environment for autograder..."
-        # 1. Fix the tempfile issue permanently at runtime
-        if [ ! -e /usr/bin/tempfile ]; then
-            ln -sf /bin/mktemp /usr/bin/tempfile
-        fi
+        
+        # Create the tempfile alias at runtime
+        # This ensures that even if the autograder pushes a broken script, 
+        # the 'tempfile' command will work.
+        ln -sf /bin/mktemp /usr/bin/tempfile
 
         # 2. Load the driver
         echo "Loading aesdchar driver..."
@@ -16,7 +17,8 @@ case "$1" in
         echo "Starting aesdsocket..."
         start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d
         
-        # 4. Give the system a moment to settle
+        # 4. Synchronization Wait
+        # GitHub Actions is slow; give the driver and socket time to init.
         sleep 2
         ;;
     stop)

@@ -3,21 +3,19 @@
 
 echo "Fish"
 
-# Only try to load the driver if the script exists (Target vs Host check)
-if [ -f /usr/bin/aesdchar_load ]; then
-    /usr/bin/aesdchar_load
-else
-    echo "Skipping driver load (likely running on Host)"
-fi
+sleep 10
 
-# Only try to start the socket if it exists and isn't already running
-if [ -f /usr/bin/aesdsocket ]; then
-    # Check if already running to avoid "Address already in use"
-    if ! pgrep aesdsocket > /dev/null; then
-        /usr/bin/aesdsocket -d
-    fi
-fi
+tempfile() {
+    mktemp
+}
 
+# This ensures we aren't talking to a "hung" daemon from a previous stage
+killall -9 aesdsocket 2>/dev/null
+/usr/bin/aesdchar_unload 2>/dev/null
+/usr/bin/aesdchar_load
+
+# This solves the race condition where the script is faster than the bind()
+/usr/bin/aesdsocket -d
 sleep 2
 
 target=localhost
